@@ -12,7 +12,7 @@ import (
 func FetchGeo(query string) (*sjson.Json, error) {
 	query = url.QueryEscape(query)
 	searchUrl := fmt.Sprintf("http://api.geonames.org/searchJSON?q=%s&maxRows=10&username=%s", query, "cloudaice")
-	resp, err := client.Get(searchUrl)
+	resp, err := httpClient.Get(searchUrl)
 	if err != nil {
 		return nil, err
 	}
@@ -24,9 +24,9 @@ func FetchGeo(query string) (*sjson.Json, error) {
 	return js, nil
 }
 
-// SearchCityFromInternet return the best match city from geo website
-func SearchCityFromInternet(city string) (string, error) {
-	js, err := FetchGeo(city)
+// 从网络上匹配对应的城市
+func matchCityFromInternet(query string) (string, error) {
+	js, err := FetchGeo(query)
 	if err != nil {
 		return "", err
 	}
@@ -39,7 +39,7 @@ func SearchCityFromInternet(city string) (string, error) {
 	for idx := 0; idx < numResult; idx++ {
 		val, err := js.GetIndex(idx).Get("adminName1").String()
 		if err != nil {
-			log.Println("Change adminName1 error", js.GetIndex(idx).Get("adminName1"), err)
+			log.Printf("checkout adminName1 error: %s, adminName1: %v\n", err, js.GetIndex(idx).Get("adminName1"))
 			break
 		}
 		for _, cty := range CityList {
@@ -48,11 +48,12 @@ func SearchCityFromInternet(city string) (string, error) {
 			}
 		}
 	}
-	return "", fmt.Errorf("None")
+	return "", ErrNotFound
 }
 
-func SearchCountryFromInternet(country string) (string, error) {
-	js, err := FetchGeo(country)
+// 从网络上匹配对应的国家
+func matchCountryFromInternet(query string) (string, error) {
+	js, err := FetchGeo(query)
 	if err != nil {
 		return "", err
 	}
@@ -64,7 +65,7 @@ func SearchCountryFromInternet(country string) (string, error) {
 	for idx := 0; idx < numResult; idx++ {
 		val, err := js.GetIndex(idx).Get("countryCode").String()
 		if err != nil {
-			log.Println("Change countryCode error", js.GetIndex(idx).Get("countryCode"), err)
+			log.Println("checkout countryCode error: %s, countryCode: %v\n", err, js.GetIndex(idx).Get("countryCode"))
 			break
 		}
 		for _, countryCode := range CountryCodeList {
@@ -73,5 +74,5 @@ func SearchCountryFromInternet(country string) (string, error) {
 			}
 		}
 	}
-	return "", fmt.Errorf("None")
+	return "", ErrNotFound
 }

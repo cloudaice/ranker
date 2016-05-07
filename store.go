@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"log"
 	"os"
 	"os/signal"
@@ -14,9 +15,13 @@ var (
 	db *bolt.DB
 )
 
+var (
+	BucketNotFound = errors.New("Bucket Not Found")
+)
+
 func init() {
 	var err error
-	db, err = bolt.Open("ranker.db", 0600, nil)
+	db, err = bolt.Open("./db/ranker.db", 0600, nil)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -29,54 +34,17 @@ func init() {
 	}()
 }
 
-func StoreWorker() {
-	ch := make(chan User, 100)
-	stop := make(chan struct{})
-	up := NewUserUpdater("world", ch)
-	go func() {
-		up.Start()
-		stop <- struct{}{}
-	}()
+type Persister func(users <-chan User)
 
-	go func() {
-		for i := 1; i < 11; i++ {
-			log.Println(i)
-			users := SearchUser("world", i, "followers")
-			for _, user := range users {
-				ch <- user
-			}
-		}
-		close(ch)
-	}()
-	<-stop
-}
-
-type UserUpdater struct {
-	input  chan User
-	bucket string
-}
-
-func NewUserUpdater(bucket string, input chan User) *UserUpdater {
-	return &UserUpdater{
-		input:  input,
-		bucket: bucket,
-	}
-}
-
-func (u *UserUpdater) Start() {
-	for user := range u.input {
-		key := []byte(user.ID)
-		val, err := json.Marshal(user)
-		if err != nil {
-			log.Println("Mashal error", err)
-			continue
-		}
-		if err := Store(u.bucket, key, val); err != nil {
-			log.Println("Store error", err)
+func storeUser(users <-chan User) {
+	for user := range users {
+		if err := StoreUser(user.LT, &user); err != nil {
+			log.Printf("store user error: %s, user: %v\n", err, user)
 		}
 	}
 }
 
+// 写入到指定bucket的指定key, val中
 func Store(bucket string, key, val []byte) error {
 	return db.Update(func(bx *bolt.Tx) error {
 		bk, err := bx.CreateBucketIfNotExists([]byte(bucket))
@@ -87,10 +55,39 @@ func Store(bucket string, key, val []byte) error {
 	})
 }
 
+// StoreUser store user into the bucket
+func StoreUser(bucket string, user *User) error {
+	key := []byte(user.ID)
+	val, err := json.Marshal(user)
+	if err != nil {
+		return err
+	}
+	return Store(bucket, key, val)
+}
+
+func Delete(bucket string, key []byte) error {
+	return db.Update(func(bx *bolt.Tx) error {
+		bt := bx.Bucket([]byte(bucket))
+		if bt == nil {
+			return BucketNotFound
+		}
+		return bt.Delete(key)
+	})
+}
+
+func DeleteUser(bucket string, user *User) error {
+	key := []byte(user.ID)
+	return Delete(bucket, key)
+}
+
+// Load read key from provided bucket
 func Load(bucket string, key []byte) ([]byte, error) {
 	var data []byte
 	err := db.View(func(bx *bolt.Tx) error {
 		bt := bx.Bucket([]byte(bucket))
+		if bt == nil {
+			return BucketNotFound
+		}
 		data = bt.Get(key)
 		return nil
 	})
@@ -100,40 +97,19 @@ func Load(bucket string, key []byte) ([]byte, error) {
 	return data, nil
 }
 
-// StoreCityMap store city dict
-func StoreCityMap() error {
-	val, err := json.Marshal(CityList)
+func LoadUser(bucket, id string) *User {
+	data, err := Load(bucket, []byte(id))
 	if err != nil {
-		return err
+		log.Printf("Load user error: %s, bucket: %s, id: %s\n", err, bucket, id)
+		return nil
 	}
-	return Store("meta", []byte("cityMap"), val)
-}
-
-// LoadCityMap ...
-func LoadCityMap(val map[string]string) error {
-	data, err := Load("meta", []byte("cityMap"))
+	val := new(User)
+	err = json.Unmarshal(data, val)
 	if err != nil {
-		return err
+		log.Printf("UnMashal user error: %s, user: %s\n", err, string(data))
+		return nil
 	}
-	return json.Unmarshal(data, val)
-}
-
-// StoreCountryMap store country dict
-func StoreCountryMap() error {
-	val, err := json.Marshal(CountryMap)
-	if err != nil {
-		return err
-	}
-	return Store("meta", []byte("countryMap"), val)
-}
-
-// LoadCountryMap
-func LoadCountryMap(val map[string]string) error {
-	data, err := Load("meta", []byte("countryMap"))
-	if err != nil {
-		return err
-	}
-	return json.Unmarshal(data, val)
+	return val
 }
 
 //
@@ -141,6 +117,9 @@ func LoadBucket(bucket string) ([][]byte, error) {
 	var data [][]byte
 	err := db.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte(bucket))
+		if b == nil {
+			return BucketNotFound
+		}
 		b.ForEach(func(k, v []byte) error {
 			data = append(data, v)
 			return nil

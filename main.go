@@ -6,22 +6,25 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"os"
 	"sort"
 	"strconv"
 )
 
+const (
+	Unknow string = "Unknow"
+)
+
 func main() {
-	//fmt.Println(MatchCity("taizhou linhai"))
-	//fmt.Println(SearchUser("china", 1, "followers"))
-	//fmt.Println(SearchUser("world", 1, "followers"))
-	//RunServer()
-	//	source := &UserSearcher{}
-	//	worker := &UserSyncer{origin: source}
-	//	worker.Start()
-	//log.Println(source.GetChinaUser())
-	//log.Println(source.GetWorldUser())
+	logfile, err := os.OpenFile("ranker.log", os.O_WRONLY|os.O_CREATE, 06444)
+	if err != nil {
+		panic(err)
+	}
+	defer logfile.Close()
+	log.SetOutput(logfile)
+	go RunJobs(CrawlChina, storeUser, etlCountry, etlCity, etlScore, etlLanguage)
+	go RunJobs(CrawlWorld, storeUser, etlCountry, etlCity, etlScore, etlLanguage)
 	RunServer()
-	//StoreWorker()
 }
 
 func RunServer() {
@@ -34,6 +37,7 @@ func RunServer() {
 	mux.HandleFunc("/chinamap", ChinaMapHandler)
 	mux.HandleFunc("/worldmap", WorldMapHandler)
 	mux.HandleFunc("/favicon.ico", FaviconHandler)
+	log.Println("Start Service on :9090")
 	log.Fatal(http.ListenAndServe(":9090", mux))
 }
 
@@ -66,12 +70,13 @@ func ParsePage(r *http.Request) (int, int) {
 	return int(currentPage), int(pageSize)
 }
 
-func LoadUser(data [][]byte) []User {
+func LoadUsers(data [][]byte) []User {
 	var users []User
 	for _, val := range data {
 		user := User{}
 		if err := json.Unmarshal(val, &user); err != nil {
-			log.Println("Unmarshal error", err)
+			log.Printf("Unmarshal user error: %s, user: %s\n", err, string(val))
+			continue
 		}
 		users = append(users, user)
 	}
@@ -85,10 +90,7 @@ func ChinaHandler(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(err.Error()))
 		return
 	}
-	users := LoadUser(data)
-	for i, _ := range users {
-		users[i].Score = users[i].FollowersCount
-	}
+	users := LoadUsers(data)
 	sort.Sort(UserList(users))
 	for i, _ := range users {
 		users[i].Ranker = i + 1
@@ -115,11 +117,7 @@ func WorldHandler(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(err.Error()))
 		return
 	}
-	users := LoadUser(data)
-	for i, _ := range users {
-		users[i].Score = users[i].FollowersCount
-	}
-
+	users := LoadUsers(data)
 	sort.Sort(UserList(users))
 	for i, _ := range users {
 		users[i].Ranker = i + 1
@@ -145,29 +143,17 @@ func ChinaMapHandler(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(err.Error()))
 		return
 	}
-	users := LoadUser(data)
+	users := LoadUsers(data)
 	cm := make(map[string]int)
 	for _, city := range CityList {
 		cm[city] = 0
 	}
 	for _, user := range users {
-		if user.Location == "" {
-			user.Location = "UnKnow"
+		city := user.RealCity
+		if city == Unknow {
 			continue
 		}
-		location := user.Location
-		city, err := SearchCityFromLocal(location)
-		if err == nil {
-			cm[city] = cm[city] + 1
-			continue
-		}
-		log.Println("SearchCityFromLocal failed", location, err)
-		city, err = SearchCityFromInternet(location)
-		if err == nil {
-			cm[city] = cm[city] + 1
-			continue
-		}
-		log.Println("SearchCityFromInternet failed", location, err)
+		cm[city] = cm[city] + 1
 	}
 	var lts []Location
 	for k, v := range cm {
@@ -193,30 +179,18 @@ func WorldMapHandler(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(err.Error()))
 		return
 	}
-	users := LoadUser(data)
+	users := LoadUsers(data)
 	cm := make(map[string]int)
 	for _, country := range CountryCodeList {
 		cm[country] = 0
 	}
 
 	for _, user := range users {
-		if user.Location == "" {
-			user.Location = "UnKnow"
+		country := user.RealCountry
+		if country == Unknow {
 			continue
 		}
-		location := user.Location
-		country, err := SearchCountryFromLocal(location)
-		if err == nil {
-			cm[country] = cm[country] + 1
-			continue
-		}
-		log.Println("SearchCountryFromLocal failed", location, err)
-		country, err = SearchCountryFromInternet(location)
-		if err == nil {
-			cm[country] = cm[country] + 1
-			continue
-		}
-		log.Println("SearchCountryFromInternet failed", location, err)
+		cm[country] = cm[country] + 1
 	}
 	var lts []Location
 	for k, v := range cm {

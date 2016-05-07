@@ -3,3 +3,7 @@ world.txt
 ranker.db
 ret.txt
 ranker
+ranker.yaml
+output/*
+upload.sh
+build.sh

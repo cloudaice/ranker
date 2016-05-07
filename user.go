@@ -11,7 +11,9 @@ type User struct {
 	FollowersCount  int    `json:"followersCount"`
 	PublicRepoCount int    `json:"publicRepoCount"`
 	Score           int    `json:"score"`
-	RealLocation    string `json:"realLocation"`
+	RealCity        string `json:"realCity"`
+	RealCountry     string `json:"realCountry"`
+	LT              string `json:"lt"` // location type china or world
 }
 
 type Location struct {
